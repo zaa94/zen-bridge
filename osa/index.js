@@ -126,19 +126,40 @@ function listen() {
   async function check() {
     const db = await dbPromise;
     const query = `
-            SELECT
-                guid,
-                id as handle,
-                message.service,
-                account,
-                text,
-                date,
-                date_read,
-                is_from_me,
-                cache_roomnames
-            FROM message
-            LEFT OUTER JOIN handle ON message.handle_id = handle.ROWID
-            WHERE date >= ${last}
+            SELECT DISTINCT
+            *,
+            ct.guid as chat_handle_id
+            FROM
+                (
+                    SELECT DISTINCT
+                        CASE 
+                          WHEN cache_roomnames is NULL THEN 0
+                          ELSE 1
+                        END as is_groupchat,
+                        guid as message_guid,
+                        message.ROWID as message_row_id,
+                        id as handle,
+                        message.service,
+                        account,
+                        text,
+                        date,
+                        date_read,
+                        is_from_me,
+                        cache_roomnames
+                    FROM message
+                    LEFT OUTER JOIN handle 
+                    ON message.handle_id = handle.ROWID
+                    WHERE date >= ${last}
+                )
+
+            INNER JOIN chat_message_join cj
+            ON message_row_id = cj.message_id
+            AND date = cj.message_date
+
+            INNER JOIN chat ct
+            on cj.chat_id = ct.ROWID
+
+
         `;
     last = packTimeConditionally(appleTimeNow());
 
@@ -149,9 +170,10 @@ function listen() {
         emittedMsgs[msg.guid] = true;
         emitter.emit("message", {
           raw: msg,
-          guid: msg.guid,
+          guid: msg.message_guid,
           text: msg.text,
           handle: msg.handle,
+          chatHandle: msg.chat_handle_id,
           service: msg.service === "SMS" ? msg.service : msg.account,
           group: msg.cache_roomnames,
           fromMe: !!msg.is_from_me,
